@@ -109,6 +109,7 @@ def fft3(data: np.ndarray) -> np.ndarray:
     shifted = ifftshift(data, axes=axes)
     return fftshift(fftn(shifted, axes=axes), axes=axes)
 
+    fftshift(fftn(ifftshift(data)))
 
 def radial_profile(data, center=None):
     if center is None:
@@ -182,6 +183,15 @@ def full_fft(path: str, offset=100):
     return np.stack([magrot, phaserot])
 
 
+def random_patch_slices(shape, n: int = 1, patch_size: int = 128):
+    # shift coords to deskewed space
+    a = patch_size // 2
+    coords = np.stack([np.random.randint(a, x - a, size=n) for x in shape])
+    coords = (np.linalg.inv(MAT[:3, :3]) @ coords).T.astype(int)
+    for c in coords:
+        yield tuple(slice(x - a, x + a) for x in c)
+
+
 def file_to_patches(
     path: str, n_patches: int = 6, patch_size: int = 128, offset: int = 100
 ) -> np.ndarray:
@@ -192,10 +202,16 @@ def file_to_patches(
     return np.stack([deskewed[p] for p in patch_slices])
 
 
-def random_patch_slices(shape, n: int = 1, patch_size: int = 128):
-    # shift coords to deskewed space
-    a = patch_size // 2
-    coords = np.stack([np.random.randint(a, x - a, size=n) for x in shape])
-    coords = (np.linalg.inv(MAT[:3, :3]) @ coords).T.astype(int)
-    for c in coords:
-        yield tuple(slice(x - a, x + a) for x in c)
+def folder_to_patches(path):
+    path = Path(path)
+    patch_dir = path / "patches"
+    patch_dir.mkdir(exist_ok=True, parents=True)
+    for image in sorted(path.glob("*.tif")):
+        stack = int(image.name.split("stack")[1][:4])
+        prefix = f"{path.name}_stack{stack:04}_"
+        if any(patch_dir.glob(f"{prefix}*")):
+            print("skipping", image)
+            continue
+        print("processing", image)
+        for i, patch in enumerate(file_to_patches(image)):
+            np.savez(patch_dir / f"{prefix}{i:03}.npz", patch)
