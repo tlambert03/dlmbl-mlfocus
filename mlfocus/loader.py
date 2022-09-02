@@ -22,9 +22,8 @@ MAT[2, 0] = -deskewFactor
 
 
 class MyData(Dataset):
-    def __init__(self, root: str, patch_size: int = 128, transform=None, do_fft=True):
+    def __init__(self, root: str, patch_size: int = 128, transform=None):
         self.root = Path(root)
-        self.do_fft = do_fft
         self.files = sorted(self.root.rglob("*patches/*.npz"))
         self.half_patch = patch_size // 2
 
@@ -33,21 +32,27 @@ class MyData(Dataset):
 
     def __getitem__(self, index):
         file = self.files[index]
-        print(file)
         label = z_offset_from_name(file.name)
         image = torch.from_numpy(np.load(file)["arr_0"])
-        
-        if self.do_fft:
-            image = self._prep_fft(image)
+        image = self._prep_fft(image)
 
-        return image[np.newaxis], label
+        # (1, 2, 128, 128), float
+        return image, np.float32(label)
 
     def _prep_fft(self, img):
+        # take windowed fft
         img = img * window3d(img.shape, windows.cosine)
         img = fftshift(fftn(ifftshift(img)))
 
+        # take ZR radial average
         qpatch = self.half_patch // 2
         slc = slice(self.half_patch - qpatch, self.half_patch + qpatch)
-        a = radial_profile_2d(np.abs(img))[slc, :qpatch]
-        b = radial_profile_2d(np.angle(img))[slc, :qpatch]
-        return torch.from_numpy(np.stack([a, b]))
+        comp_abs = radial_profile_2d(np.abs(img))[slc, :qpatch]
+        comp_angle = radial_profile_2d(np.angle(img))[slc, :qpatch]
+        
+        comp_abs = comp_abs / np.percentile(comp_abs, 99)
+        
+        # return two channel real/imag stack
+        return torch.from_numpy(np.stack([comp_abs, comp_angle]).astype(np.float32))
+
+
