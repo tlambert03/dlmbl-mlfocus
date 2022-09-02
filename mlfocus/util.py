@@ -202,7 +202,7 @@ def file_to_patches(
     return np.stack([deskewed[p] for p in patch_slices])
 
 
-def folder_to_patches(path):
+def folder_to_patches(path, tries=0):
     path = Path(path)
     patch_dir = path / "patches"
     patch_dir.mkdir(exist_ok=True, parents=True)
@@ -213,5 +213,11 @@ def folder_to_patches(path):
             print("skipping", image)
             continue
         print("processing", image)
-        for i, patch in enumerate(file_to_patches(image)):
-            np.savez(patch_dir / f"{prefix}{i:03}.npz", patch)
+        try:
+            for i, patch in enumerate(file_to_patches(image)):
+                np.savez(patch_dir / f"{prefix}{i:03}.npz", patch)
+        except Exception as e:
+            if tries >= 5:
+                raise e
+            print("retrying", image.name)
+            folder_to_patches(path, tries=tries + 1)
