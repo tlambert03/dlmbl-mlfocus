@@ -36,20 +36,18 @@ class MyData(Dataset):
         print(file)
         label = z_offset_from_name(file.name)
         image = torch.from_numpy(np.load(file)["arr_0"])
+        
         if self.do_fft:
-            image = self._fft(image)
-            image = self._radial(image)
-        # (1, Z, Y, X)
+            image = self._prep_fft(image)
+
         return image[np.newaxis], label
 
-    def _fft(self, img):
+    def _prep_fft(self, img):
         img = img * window3d(img.shape, windows.cosine)
-        return fftshift(fftn(ifftshift(img)))
+        img = fftshift(fftn(ifftshift(img)))
 
-    def _radial(self, img):
         qpatch = self.half_patch // 2
         slc = slice(self.half_patch - qpatch, self.half_patch + qpatch)
         a = radial_profile_2d(np.abs(img))[slc, :qpatch]
         b = radial_profile_2d(np.angle(img))[slc, :qpatch]
         return torch.from_numpy(np.stack([a, b]))
-    
