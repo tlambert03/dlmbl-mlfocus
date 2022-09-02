@@ -1,8 +1,11 @@
-from typing import Union
-import numpy as np
-from napari_ndtiffs import reader
-from tifffile import imread, imwrite
 from pathlib import Path
+from typing import Optional, Tuple, Union
+
+import numpy as np
+from napari_ndtiffs.reader import get_deskew_func
+from scipy import signal
+from scipy.fft import fftn, fftshift, ifftshift
+from tifffile import imread, imwrite
 
 
 mag = 61.90476
@@ -11,11 +14,13 @@ DZ = 0.2  # I checked... and every file in this dataset used this stage step
 ANGLE = 31
 OFFSET = 100
 
+# Transformation matrix that can be used to deskew images/coordinates
+# into proper cartesian space
 MAT = np.eye(4)
 MAT[2, 0] = -np.cos(np.deg2rad(ANGLE)) * DZ / DX
 
 
-def z_offset_from_name(name: str, z_off_step=0.1, center=25) -> str:
+def z_offset_from_name(name: str, z_off_step=0.1, center=25) -> float:
     stack = int(name.split("stack")[1][:4])
     offset = (stack - center) * z_off_step
     return round(offset, 2)
@@ -30,7 +35,7 @@ def deskew(
 ) -> np.ndarray:
     """Deskew a numpy array."""
     data = np.clip(data, offset, None) - offset
-    deskew_func, _, _ = reader.get_deskew_func(data.shape, dx=dx, dz=dz, angle=angle)
+    deskew_func, _, _ = get_deskew_func(data.shape, dx=dx, dz=dz, angle=angle)
     return deskew_func(data)
 
 
@@ -68,11 +73,6 @@ def deskew_folder(pth: str):
         executor.map(_deskew_and_save_tiff, Path(pth).glob("*.tif"))
 
 
-from scipy.fft import fftn, ifftn, fftshift, ifftshift
-from scipy import signal
-import numpy as np
-
-
 def window3d(shape, fwin=signal.windows.kaiser, **winkwargs) -> np.ndarray:
     """Return 3-dimensional window."""
     D, H, W = shape
@@ -103,28 +103,27 @@ def center_crop(data, size=128, cz=None, cy=None) -> np.ndarray:
 
 def fft3(data: np.ndarray) -> np.ndarray:
     """Return 3-dimensional fft of data."""
-    # axes = np.arange(3) + (data.ndim - 3)
-    axes = None
     data = data * window3d(data.shape[-3:], beta=6)
-    shifted = ifftshift(data, axes=axes)
-    return fftshift(fftn(shifted, axes=axes), axes=axes)
+    return fftshift(fftn(ifftshift(data)))
 
-    fftshift(fftn(ifftshift(data)))
 
-def radial_profile(data, center=None):
-    if center is None:
-        cy, cx = np.array(data.shape) // 2
+def radial_profile(data: np.ndarray, around: Optional[Tuple[int, int]] = None):
+    """Create radial profile of 2 array, centered around `around`.
+
+    If not provided, `around` is the center of the image.
+    """
+    cy, cx = np.array(data.shape) // 2 if around is None else around
     y, x = np.indices(data.shape)
     r = np.sqrt((y - cy) ** 2 + (x - cx) ** 2)
-    r = r.astype(np.int)
+    r = r.astype(int)
     tbin = np.bincount(r.ravel(), data.ravel())
     nr = np.bincount(r.ravel())
     return tbin / nr
 
 
-def radial_profile_2d(data, center=None):
-    # fugly
-    return np.stack([radial_profile(plane, center=center) for plane in data])
+def radial_profile_2d(data, around=None):
+    """Embarassing way to get a radial profile of a 3d array on the ZR plane"""
+    return np.stack([radial_profile(plane, around=around) for plane in data])
 
 
 def prep_data(data, size=128, cz=None, cy=None) -> np.ndarray:
