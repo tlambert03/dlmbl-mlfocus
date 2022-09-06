@@ -1,26 +1,41 @@
+from typing import List, Optional
 from tqdm import tqdm
 from torch import nn, optim
 from torch.utils.data import DataLoader, Dataset
 import torch.cuda
 from torch import Tensor, argmax, sum, mean
 import toolz as tz
-
+import wandb
+import torch
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def train(
-    loader: DataLoader, model: nn.Module, optimizer: optim.Optimizer, loss: nn.Module
-) -> Tensor:
+def train_step(
+    loader: DataLoader,
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    loss: nn.Module,
+    *,
+    log_interval: int = 100,
+    epoch_idx: Optional[int] = None,
+    device=DEVICE,
+    sanity_check: bool = False,
+) -> List[float]:
     """Train the model for one epoch."""
 
     # set the model into train mode
     model.train()
 
-    losses = Tensor(0)
-    for x, y in tqdm(loader, "train"):
+    losses = []
+    nbatches = len(loader)
+    nitems = len(loader.dataset)
 
-        x, y = x.to(DEVICE), y.to(DEVICE)
+    pbar = tqdm(enumerate(loader), "train", total=nbatches)
+
+    for batch_idx, (x, y) in pbar:
+
+        x, y = x.to(device), y.to(device)
         optimizer.zero_grad()
 
         y_pred = model(x)
@@ -28,9 +43,20 @@ def train(
         l.backward()
 
         optimizer.step()
-        losses.add(l.item())
+        losses.append(l.item())
+        
+        if sanity_check:
+            print("sanity check", l.item())
+            return losses
+        
+        wandb.log({"loss": float(l.item()), "epoch": epoch_idx})
 
-    return mean(losses)
+        if log_interval and batch_idx % log_interval == 0:
+            pbar.set_description(
+                f"Epoch: {epoch_idx} [{batch_idx * len(x)}/{nitems}]\tLoss: {l.item():.6f}"
+            )
+
+    return losses
 
 
 @tz.curry
@@ -53,5 +79,30 @@ def evaluate(data: Dataset, model: nn.Module, name: str, batch_size: int = 32):
     return correct / total
 
 
-validate = evaluate(name="validate")
-test = evaluate(name="test")
+# validate = evaluate(name="validate")
+# test = evaluate(name="test")
+
+
+# run validation after training epoch
+def validate(model, loader, criterion, device=DEVICE):
+    # set model to eval mode
+    model.eval()
+    model.to(device)
+
+    # running loss and metric values
+    tot_val_loss = 0
+
+    # disable gradients during validation
+    with torch.no_grad():
+        # iterate over validation loader and update loss and metric values
+        for x, y in loader:
+            x, y = x.to(device), y.to(device)
+            prediction = model(x)
+            tot_val_loss += criterion(prediction, y).item()
+
+    # normalize loss and metric
+    tot_val_loss /= len(loader)
+
+    # log additional val losses here
+
+    return tot_val_loss

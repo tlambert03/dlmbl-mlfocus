@@ -1,11 +1,17 @@
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import TYPE_CHECKING, Optional, Tuple, Union
 
 import numpy as np
+import pandas as pd
+import torch
 from napari_ndtiffs.reader import get_deskew_func
 from scipy import signal
 from scipy.fft import fftn, fftshift, ifftshift
 from tifffile import imread, imwrite
+import seaborn as sns
+
+if TYPE_CHECKING:
+    from torch.utils.data import Dataset
 
 
 mag = 61.90476
@@ -220,3 +226,55 @@ def folder_to_patches(path, tries=0):
                 raise e
             print("retrying", image.name)
             folder_to_patches(path, tries=tries + 1)
+
+
+def preview_data(dataset: "Dataset", n=3, figsize=(3, 10)):
+    import matplotlib.pyplot as plt
+
+    data, label = next(iter(dataset))
+    print("data shape", data.shape, data.dtype)
+    print("label shape", label.shape)
+    print("dataset length", len(dataset))
+
+    nC = data.shape[-3]
+    _, axes = plt.subplots(n, nC, figsize=figsize)
+    for row, idx in enumerate(np.random.randint(0, len(dataset), size=n)):
+        img, label = dataset[idx]
+        for c in range(nC):
+            cimg = img[c]
+            cimg = cimg[0] if cimg.ndim == 3 else cimg
+            if c == 0:
+                cimg = cimg ** 0.01
+            idx = (row, c) if nC > 1 else row
+            axes[idx].imshow(cimg)
+            axes[idx].set_title(f"{label.item():0.2f}")
+            axes[idx].axis("off")
+
+
+def characterize(model, dataset, device=None, criterion=None):
+    model.eval()
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    records = []
+    with torch.no_grad():
+        for i, (x, y) in enumerate(dataset):
+            x, y = x.to(device), y.to(device)
+
+            prediction = model(x[None])
+            R = {
+                "file": str(dataset.files[i]),
+                "class": dataset.get_class(i),
+                "gt": y.item(),
+                "pred": prediction.item(),
+            }
+            if criterion is not None:
+                R["err"] = criterion(prediction, y[None]).item()
+            records.append(R)
+
+    return pd.DataFrame(records)
+
+
+def plot_results(model, dataset, device):
+    df = characterize(model, dataset, device)
+    
